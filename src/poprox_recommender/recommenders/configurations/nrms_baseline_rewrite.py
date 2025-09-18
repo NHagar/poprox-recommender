@@ -1,7 +1,8 @@
 # pyright: basic
 
-from lenskit.pipeline import PipelineBuilder, Component
 from typing import Optional
+
+from lenskit.pipeline import Component, PipelineBuilder
 
 from poprox_concepts import CandidateSet, InterestProfile
 from poprox_concepts.domain import RecommendationList
