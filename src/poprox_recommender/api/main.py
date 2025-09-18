@@ -13,13 +13,12 @@ from poprox_recommender.config import default_device
 from poprox_recommender.recommenders import load_all_pipelines, select_articles
 from poprox_recommender.topics import user_locality_preference, user_topic_preference
 
-logger = logging.getLogger(__name__)
-
 app = FastAPI()
 app.router.route_class = GzipRoute
 
 
 logger = logging.getLogger(__name__)
+structured_logger = structlog.stdlib.get_logger(__name__)
 
 
 @app.get("/warmup")
@@ -29,6 +28,12 @@ def warmup(response: Response):
 
     # Load and cache available recommenders
     available_recommenders = load_all_pipelines(device=default_device())
+
+    structured_logger.info(
+        "warmup.complete",
+        pipelines=list(available_recommenders.keys()),
+        pipeline_count=len(available_recommenders),
+    )
 
     return list(available_recommenders.keys())
 
@@ -84,6 +89,14 @@ if "AWS_LAMBDA_FUNCTION_NAME" in os.environ and not structlog.is_configured():
         # make sure we have debug for all of our code
         logging.getLogger("poprox_recommender").setLevel(logging.DEBUG)
         logger.info("local logging enabled")
+    else:
+        # Ensure INFO-level logs propagate to CloudWatch in the managed runtime.
+        root_logger = logging.getLogger()
+        if not root_logger.handlers:
+            logging.basicConfig(level=logging.INFO)
+        if root_logger.level > logging.INFO:
+            root_logger.setLevel(logging.INFO)
+        logging.getLogger("poprox_recommender").setLevel(logging.INFO)
 
     # set up structlog to dump to standard logging
     # TODO: enable JSON logs
