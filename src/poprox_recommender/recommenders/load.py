@@ -11,7 +11,7 @@ from lenskit.pipeline import Pipeline, PipelineBuilder, PipelineCache
 from structlog.stdlib import get_logger
 
 from poprox_recommender.config import default_device
-from poprox_recommender.diagnostics import timed_section
+from poprox_recommender.diagnostics import enable_pipeline_component_timing, timed_section
 
 from .configurations import DEFAULT_PIPELINE
 from .hooks import shallow_copy_pydantic_model
@@ -90,6 +90,7 @@ def get_pipeline_builder(name: str, device: str | None = None, num_slots: int = 
 
     builder = PipelineBuilder(norm_name, pipe_ver)
     builder.add_run_hook("component-input", shallow_copy_pydantic_model)
+    enable_pipeline_component_timing()
     with timed_section(
         "pipelines.configure",
         logger=logger,
