@@ -6,12 +6,12 @@ Functions and logic for loading recommender pipeline configurations.
 import os
 from importlib import import_module
 from importlib.metadata import version
-from pathlib import Path
 
 from lenskit.pipeline import Pipeline, PipelineBuilder, PipelineCache
 from structlog.stdlib import get_logger
 
 from poprox_recommender.config import default_device
+from poprox_recommender.diagnostics import timed_section
 
 from .configurations import DEFAULT_PIPELINE
 from .hooks import shallow_copy_pydantic_model
@@ -75,7 +75,14 @@ def get_pipeline_builder(name: str, device: str | None = None, num_slots: int = 
     logger.debug("configuring pipeline", name=norm_name, device=device, num_slots=num_slots)
     # load the module
     mod_name = f"poprox_recommender.recommenders.configurations.{norm_name}"
-    pipe_mod = import_module(mod_name)
+    with timed_section(
+        "pipelines.import_module",
+        logger=logger,
+        log_start=False,
+        pipeline=norm_name,
+        module=mod_name,
+    ):
+        pipe_mod = import_module(mod_name)
 
     pipe_ver = getattr(mod_name, "VERSION", None)
     if pipe_ver is None:
@@ -83,7 +90,16 @@ def get_pipeline_builder(name: str, device: str | None = None, num_slots: int = 
 
     builder = PipelineBuilder(norm_name, pipe_ver)
     builder.add_run_hook("component-input", shallow_copy_pydantic_model)
-    pipe_mod.configure(builder, num_slots=num_slots, device=device)
+    with timed_section(
+        "pipelines.configure",
+        logger=logger,
+        log_start=False,
+        pipeline=norm_name,
+        module=mod_name,
+        device=device,
+        num_slots=num_slots,
+    ):
+        pipe_mod.configure(builder, num_slots=num_slots, device=device)
     return builder
 
 
@@ -95,7 +111,15 @@ def get_pipeline(name: str, device: str | None = None, num_slots: int = 10) -> P
     if pipeline is None:
         try:
             builder = get_pipeline_builder(name, device, num_slots)
-            pipeline = builder.build(_component_cache)
+            with timed_section(
+                "pipelines.build",
+                logger=logger,
+                log_start=False,
+                pipeline=name,
+                device=device,
+                num_slots=num_slots,
+            ):
+                pipeline = builder.build(_component_cache)
         except ImportError as e:
             logger.error("error importing pipeline", name=name, device=device, num_slots=num_slots, exc_info=e)
             raise PipelineLoadError(f"could not import pipeline {name}")
@@ -103,6 +127,9 @@ def get_pipeline(name: str, device: str | None = None, num_slots: int = 10) -> P
             logger.error("failed to load pipeline", name=name, device=device, num_slots=num_slots, exc_info=e)
             raise PipelineLoadError(f"could not load pipeline {name}")
         _cached_pipelines[name] = pipeline
+        logger.debug("pipeline.cached", name=name, device=device, num_slots=num_slots)
+    else:
+        logger.debug("pipeline.cache_hit", name=name, device=device, num_slots=num_slots)
 
     return pipeline
 
@@ -111,4 +138,23 @@ def load_all_pipelines(device: str | None = None, num_slots: int = 10) -> dict[s
     logger.debug("loading all pipelines")
 
     names = discover_pipelines()
-    return {n: get_pipeline(n, device, num_slots) for n in names}
+    with timed_section(
+        "pipelines.load_all",
+        logger=logger,
+        device=device,
+        num_slots=num_slots,
+        pipelines=len(names),
+    ):
+        pipelines = {}
+        for name in names:
+            with timed_section(
+                "pipelines.load",
+                logger=logger,
+                log_start=False,
+                pipeline=name,
+                device=device,
+                num_slots=num_slots,
+            ):
+                pipelines[name] = get_pipeline(name, device, num_slots)
+
+    return pipelines
