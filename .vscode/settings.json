@@ -23,5 +23,6 @@
   },
   "[yaml]": {
     "editor.formatOnSave": true
-  }
+  },
+  "makefile.configureOnOpen": false
 }

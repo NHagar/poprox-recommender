@@ -1,4 +1,18 @@
-.PHONY: auth build-ecr deploy build-local serve-local pull-ecr serve-ecr test-warmup-local test-request-local test-warmup-live test-request-live test-live-eval full-deploy
+.PHONY: auth build-ecr deploy build-local serve-local pull-ecr serve-ecr test-warmup-local test-request-local test-warmup-live test-request-live test-live-eval full-deploy serve-dev test-warmup-dev test-request-dev test-dev-eval
+
+# Development server
+serve-dev:
+	uv run uvicorn poprox_recommender.api.main:app --reload --port 8080
+
+# Development server testing
+test-warmup-dev:
+	curl -X GET http://localhost:8080/warmup
+
+test-request-dev:
+	curl -X POST -H "Content-Type: application/json" "http://localhost:8080/?pipeline=llm-rank-rewrite" -d @testing_data/request-body.json
+
+test-dev-eval:
+	uv run scripts/test_live_endpoint.py --endpoint "http://localhost:8080/" --output-dir testing_data/evals --bucket poprox-default-recommender-pipeline-data-prod --runs 3
 
 # AWS ECR Authentication
 auth:

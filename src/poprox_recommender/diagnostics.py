@@ -65,7 +65,8 @@ def timed_section(
     peak_before = _maxrss_mb()
 
     if log_start:
-        log.info("warmup_section.start", **log_fields)
+        start_fields = {**log_fields, "section": section}
+        log.info("warmup_section.start", **start_fields)
 
     env_enabled = _bool_env(profiling_env)
     lines_to_show = profile_lines
@@ -104,9 +105,9 @@ def timed_section(
             mem_delta = max(0.0, peak_after - peak_before)
 
         log_kwargs: dict[str, object] = {
-            "event": section,
-            "elapsed_ms": round(elapsed * 1000, 2),
             **log_fields,
+            "section": section,
+            "elapsed_ms": round(elapsed * 1000, 2),
         }
 
         if peak_after is not None:
@@ -125,10 +126,11 @@ def timed_section(
                 log.warning("warmup_section.profile_failed", exc_info=exc)
             else:
                 stats_stream.seek(0)
-                log.info(
-                    "warmup_section.profile",
-                    profile_sort=sort_order,
-                    lines=lines_to_show,
-                    stats=stats_stream.read(),
+                profile_fields = {
                     **log_fields,
-                )
+                    "section": section,
+                    "profile_sort": sort_order,
+                    "lines": lines_to_show,
+                    "stats": stats_stream.read(),
+                }
+                log.info("warmup_section.profile", **profile_fields)
