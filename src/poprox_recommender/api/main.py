@@ -13,8 +13,8 @@ from mangum import Mangum
 from poprox_concepts.api.recommendations.v2 import ProtocolModelV2_0, RecommendationRequestV2, RecommendationResponseV2
 from poprox_recommender.api.gzip import GzipRoute
 from poprox_recommender.config import default_device
-from poprox_recommender.recommenders import load_all_pipelines, select_articles
-from poprox_recommender.timing_context import set_request_start_time, clear_request_context
+from poprox_recommender.recommenders import default_pipeline, load_all_pipelines, select_articles
+from poprox_recommender.timing_context import clear_request_context, set_request_start_time
 from poprox_recommender.topics import user_locality_preference, user_topic_preference
 
 logger = logging.getLogger(__name__)
@@ -23,11 +23,42 @@ logger = logging.getLogger(__name__)
 _warmup_future = None
 _warmup_result = None
 _warmup_lock = threading.Lock()
+_warmup_disabled = False
+
+
+def _is_truthy(value: str | None) -> bool:
+    return value is not None and value.lower() in {"1", "true", "yes", "on"}
+
+
+def _should_disable_warmup() -> bool:
+    """
+    Determine whether warmup should be disabled entirely.
+
+    Warmup is unnecessary for lightweight LLM pipelines and causes Lambda timeouts
+    when we eagerly load NRMS components. We allow explicit overrides to force
+    warmup on/off via environment variables to support custom deployments.
+    """
+    if _is_truthy(os.getenv("POPROX_FORCE_WARMUP")):
+        return False
+
+    if _is_truthy(os.getenv("POPROX_DISABLE_WARMUP")):
+        return True
+
+    pipeline_name = default_pipeline().strip()
+    return pipeline_name in {"llm_rank_only", "llm_rank_rewrite"}
+
+
+_warmup_disabled = _should_disable_warmup()
 
 
 def background_warmup():
     """Load all pipelines in background thread during Lambda initialization"""
     global _warmup_result
+
+    if _warmup_disabled:
+        logger.info("Background warmup disabled for current pipeline configuration")
+        return None
+
     try:
         logger.info("Starting background warmup of all pipelines")
         device = default_device()
@@ -46,6 +77,9 @@ def background_warmup():
 def get_cached_pipelines():
     """Get pipelines from cache, or load them if background warmup hasn't completed"""
     global _warmup_result, _warmup_future
+
+    if _warmup_disabled:
+        return None
 
     with _warmup_lock:
         if _warmup_result is not None:
@@ -70,9 +104,12 @@ app.router.route_class = GzipRoute
 
 # Start background loading during Lambda initialization
 if "AWS_LAMBDA_FUNCTION_NAME" in os.environ:
-    logger.info("Lambda detected - starting background warmup")
-    executor = ThreadPoolExecutor(max_workers=1)
-    _warmup_future = executor.submit(background_warmup)
+    if _warmup_disabled:
+        logger.info("Lambda detected - warmup disabled for pipeline %s", default_pipeline())
+    else:
+        logger.info("Lambda detected - starting background warmup")
+        executor = ThreadPoolExecutor(max_workers=1)
+        _warmup_future = executor.submit(background_warmup)
 else:
     logger.info("Not in Lambda - skipping background warmup")
 
@@ -89,8 +126,11 @@ def warmup(response: Response):
     available_recommenders = get_cached_pipelines()
 
     if available_recommenders is None:
-        # If background warmup failed and fallback also failed, return discovered names
-        logger.warning("Failed to load pipelines, returning discovered names only")
+        # If background warmup failed or was disabled, return discovered names
+        if _warmup_disabled:
+            logger.info("Warmup disabled - returning discovered pipeline names only")
+        else:
+            logger.warning("Failed to load pipelines, returning discovered names only")
         from poprox_recommender.recommenders.load import discover_pipelines
 
         return discover_pipelines()
@@ -115,7 +155,9 @@ def root(
         num_candidates = len(candidate_articles)
 
         if num_candidates < req.num_recs:
-            msg = f"Received insufficient candidates ({num_candidates}) in a request for {req.num_recs} recommendations."
+            msg = (
+                f"Received insufficient candidates ({num_candidates}) in a request for {req.num_recs} recommendations."
+            )
             raise ValueError(msg)
 
         logger.info(f"Selecting articles from {num_candidates} candidates...")
