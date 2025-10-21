@@ -219,6 +219,8 @@ Make sure you select EXACTLY {self.config.num_slots} articles from the candidate
                 )
 
             # Persist pipeline data if enabled
+            # Only persist from ranker for rank-only pipelines (no rewriter)
+            # For pipelines with rewriter, the rewriter will handle persistence
             if self.config.enable_persistence:
                 try:
                     persistence = get_persistence_manager()

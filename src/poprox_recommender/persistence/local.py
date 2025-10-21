@@ -65,7 +65,7 @@ class LocalPersistenceManager(PersistenceManager):
             "timestamp": datetime.now().isoformat(),
             "user_model_length": len(user_model),
             "num_articles": len(original_recommendations.articles),
-            "pipeline_type": "llm_rank_rewrite",
+            "pipeline_type": metadata_payload.get("pipeline_type", "unknown"),
             "storage_location": str(session_dir.resolve()),
             **metadata_payload,
         }
