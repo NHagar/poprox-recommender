@@ -24,6 +24,37 @@ _warmup_future = None
 _warmup_result = None
 _warmup_lock = threading.Lock()
 _warmup_disabled = False
+_warmup_pipeline_names: list[str] | None = None
+
+
+def _parse_warmup_pipeline_names() -> list[str]:
+    """
+    Determine which pipelines should be eagerly warmed.
+
+    The behaviour is driven by the POPROX_WARMUP_PIPELINES environment variable:
+      - unset or "default": warm only the default pipeline
+      - "all": warm every discovered pipeline
+      - "none"/"off": disable warmup entirely
+      - comma-separated list: warm the specified pipeline names
+    """
+    setting = os.getenv("POPROX_WARMUP_PIPELINES")
+    if setting is None or setting.strip().lower() == "default":
+        return [default_pipeline().strip()]
+
+    normalized = setting.strip().lower()
+    if normalized in {"none", "off"}:
+        return []
+    if normalized == "all":
+        from poprox_recommender.recommenders.load import discover_pipelines
+
+        return discover_pipelines()
+
+    names = []
+    for raw in setting.split(","):
+        name = raw.strip()
+        if name:
+            names.append(name)
+    return names
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -48,7 +79,8 @@ def _should_disable_warmup() -> bool:
     return pipeline_name in {"llm_rank_only", "llm_rank_rewrite"}
 
 
-_warmup_disabled = _should_disable_warmup()
+_warmup_pipeline_names = _parse_warmup_pipeline_names()
+_warmup_disabled = _should_disable_warmup() or not _warmup_pipeline_names
 
 
 def background_warmup():
@@ -59,10 +91,14 @@ def background_warmup():
         logger.info("Background warmup disabled for current pipeline configuration")
         return None
 
+    if not _warmup_pipeline_names:
+        logger.info("No pipelines configured for warmup")
+        return None
+
     try:
-        logger.info("Starting background warmup of all pipelines")
+        logger.info("Starting background warmup", pipelines=_warmup_pipeline_names)
         device = default_device()
-        pipelines = load_all_pipelines(device=device)
+        pipelines = load_all_pipelines(device=device, names=_warmup_pipeline_names)
 
         with _warmup_lock:
             _warmup_result = pipelines
@@ -96,7 +132,9 @@ def get_cached_pipelines():
 
     # Fallback: load synchronously
     logger.info("Loading pipelines synchronously as fallback")
-    return load_all_pipelines(device=default_device())
+    if not _warmup_pipeline_names:
+        return {}
+    return load_all_pipelines(device=default_device(), names=_warmup_pipeline_names)
 
 
 app = FastAPI()
@@ -107,7 +145,7 @@ if "AWS_LAMBDA_FUNCTION_NAME" in os.environ:
     if _warmup_disabled:
         logger.info("Lambda detected - warmup disabled for pipeline %s", default_pipeline())
     else:
-        logger.info("Lambda detected - starting background warmup")
+        logger.info("Lambda detected - starting background warmup", pipelines=_warmup_pipeline_names)
         executor = ThreadPoolExecutor(max_workers=1)
         _warmup_future = executor.submit(background_warmup)
 else:

@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Dict, List
 
 import openai
@@ -12,10 +13,16 @@ from lenskit.pipeline import Component
 from pydantic import BaseModel, Field
 
 from poprox_concepts.domain import RecommendationList
-from poprox_recommender.persistence import get_persistence_manager
+from poprox_recommender.persistence import get_persistence_manager, is_persistence_enabled, schedule_pipeline_save
 from poprox_recommender.timing_context import get_timeout_risk_info
 
 load_dotenv()
+
+
+@lru_cache(maxsize=1)
+def _load_rewrite_prompt() -> str:
+    with open("prompts/rewrite.md", "r") as f:
+        return f.read()
 
 
 class LlmResponse(BaseModel):
@@ -82,8 +89,7 @@ class LLMRewriter(Component):
         # Create a deep copy of the original recommendations for persistence
         original_recommendations = RecommendationList(articles=copy.deepcopy(recommendations.articles))
 
-        with open("prompts/rewrite.md", "r") as f:
-            prompt = f.read()
+        prompt = _load_rewrite_prompt()
 
         rewriter_metrics: List[Dict[str, Any]] = []
         component_issues: List[Dict[str, Any]] = []
@@ -212,6 +218,10 @@ Article text:
 
         # Persist pipeline data after rewriting is complete
         try:
+            if not is_persistence_enabled():
+                logging.info("Skipping persistence for rewrite pipeline because PERSISTENCE_MODE=off")
+                return recommendations
+
             persistence = get_persistence_manager()
 
             if component_snapshot is None:  # pragma: no cover - defensive fallback
@@ -236,14 +246,16 @@ Article text:
                 "timeout_info": timeout_info,
             }
 
-            session_id = persistence.save_pipeline_data(
-                request_id=request_id,
-                user_model=user_model,
-                original_recommendations=original_recommendations,
-                rewritten_recommendations=recommendations,
-                metadata=combined_metrics,
-            )
-            logging.info(f"Pipeline data saved with session_id: {session_id}")
+            def _save_pipeline_data() -> str:
+                return persistence.save_pipeline_data(
+                    request_id=request_id,
+                    user_model=user_model,
+                    original_recommendations=original_recommendations,
+                    rewritten_recommendations=recommendations,
+                    metadata=combined_metrics,
+                )
+
+            schedule_pipeline_save("rewrite pipeline persistence", _save_pipeline_data)
         except Exception as e:
             # Log the error but don't fail the pipeline
             logging.error(f"Failed to persist pipeline data: {e}")

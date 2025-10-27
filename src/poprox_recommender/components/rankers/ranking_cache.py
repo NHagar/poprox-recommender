@@ -181,12 +181,10 @@ def get_ranking_cache_manager(model_version: str = "gpt-4.1-mini-2025-04-14") ->
     Returns:
         RankingCacheManager if caching is enabled, None otherwise
     """
-    # Check if caching is explicitly disabled
-    if os.getenv("RANKING_CACHE_ENABLED", "true").lower() == "false":
+    enabled_value = os.getenv("RANKING_CACHE_ENABLED")
+    if enabled_value is None:
         return None
-
-    # Only enable caching in Lambda or if explicitly enabled
-    if not (os.getenv("AWS_LAMBDA_FUNCTION_NAME") or os.getenv("RANKING_CACHE_ENABLED") == "true"):
+    if enabled_value.lower() not in {"1", "true", "yes", "on"}:
         return None
 
     try:

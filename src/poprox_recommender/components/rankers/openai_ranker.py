@@ -2,6 +2,7 @@ import logging
 import os
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Dict, Optional, Union
 
 import openai
@@ -12,10 +13,16 @@ from pydantic import BaseModel, Field
 from poprox_concepts import CandidateSet, InterestProfile
 from poprox_concepts.domain import RecommendationList
 from poprox_recommender.components.rankers.ranking_cache import get_ranking_cache_manager
-from poprox_recommender.persistence import get_persistence_manager
+from poprox_recommender.persistence import get_persistence_manager, is_persistence_enabled, schedule_pipeline_save
 from poprox_recommender.timing_context import get_timeout_risk_info
 
 load_dotenv()
+
+
+@lru_cache(maxsize=1)
+def _load_rank_prompt() -> str:
+    with open("prompts/rank.md", "r") as f:
+        return f.read()
 
 
 class LlmResponse(BaseModel):
@@ -159,8 +166,7 @@ Headlines of articles the user has clicked on recently:
             else:
                 component_meta["cache_hit"] = False
 
-        with open("prompts/rank.md", "r") as f:
-            prompt = f.read()
+        prompt = _load_rank_prompt()
 
         client = openai.OpenAI(api_key=self.config.openai_api_key)
 
@@ -221,7 +227,7 @@ Make sure you select EXACTLY {self.config.num_slots} articles from the candidate
             # Persist pipeline data if enabled
             # Only persist from ranker for rank-only pipelines (no rewriter)
             # For pipelines with rewriter, the rewriter will handle persistence
-            if self.config.enable_persistence:
+            if self.config.enable_persistence and is_persistence_enabled():
                 try:
                     persistence = get_persistence_manager()
 
@@ -242,14 +248,16 @@ Make sure you select EXACTLY {self.config.num_slots} articles from the candidate
                         "timeout_info": timeout_info,
                     }
 
-                    session_id = persistence.save_pipeline_data(
-                        request_id=self.request_id,
-                        user_model=user_model,
-                        original_recommendations=original_recommendations,
-                        rewritten_recommendations=original_recommendations,  # No rewriting in rank-only
-                        metadata=combined_metrics,
-                    )
-                    logging.info(f"Pipeline data saved with session_id: {session_id}")
+                    def _save_pipeline_data() -> str:
+                        return persistence.save_pipeline_data(
+                            request_id=self.request_id,
+                            user_model=user_model,
+                            original_recommendations=original_recommendations,
+                            rewritten_recommendations=original_recommendations,  # No rewriting in rank-only
+                            metadata=combined_metrics,
+                        )
+
+                    schedule_pipeline_save("rank-only pipeline persistence", _save_pipeline_data)
                 except Exception as e:
                     # Log the error but don't fail the pipeline
                     logging.error(f"Failed to persist pipeline data: {e}")

@@ -107,8 +107,20 @@ def get_pipeline(name: str, device: str | None = None, num_slots: int = 10) -> P
     return pipeline
 
 
-def load_all_pipelines(device: str | None = None, num_slots: int = 10) -> dict[str, Pipeline]:
-    logger.debug("loading all pipelines")
+def load_all_pipelines(
+    device: str | None = None,
+    num_slots: int = 10,
+    names: list[str] | None = None,
+) -> dict[str, Pipeline]:
+    """
+    Load a set of pipelines into memory and return them.
 
-    names = discover_pipelines()
-    return {n: get_pipeline(n, device, num_slots) for n in names}
+    Args:
+        device: Optional override for the target device.
+        num_slots: Number of recommendation slots to configure.
+        names: Explicit list of pipeline names. If omitted, loads all discovered pipelines.
+    """
+    logger.debug("loading pipelines", pipeline_names=names)
+
+    pipeline_names = names if names is not None else discover_pipelines()
+    return {n: get_pipeline(n, device, num_slots) for n in pipeline_names}
