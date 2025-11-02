@@ -17,11 +17,17 @@ class RewriteCacheEntry:
     original_headline: str
     user_model_hash: str
     article_id: str
+    pipeline_name: str
     cached_at: float
 
 
-def _generate_cache_key(request_id: str, article_id: str, user_model_hash: str) -> str:
-    return f"{request_id}:{article_id}:{user_model_hash}"
+def _generate_cache_key(
+    article_id: str,
+    user_model_hash: str,
+    pipeline_name: str | None = None,
+) -> str:
+    pipeline_part = (pipeline_name or "").strip()
+    return f"{pipeline_part}:{article_id}:{user_model_hash}"
 
 
 def hash_user_model(user_model: str | None) -> str:
@@ -51,12 +57,12 @@ class MemoryRewriteCache:
 
     def get_cached_rewrite(
         self,
-        request_id: str,
         article_id: str,
         user_model_hash: str,
         original_headline: str,
+        pipeline_name: str | None = None,
     ) -> Optional[RewriteCacheEntry]:
-        cache_key = _generate_cache_key(request_id, article_id, user_model_hash)
+        cache_key = _generate_cache_key(article_id, user_model_hash, pipeline_name)
         with self._lock:
             entry = self._store.get(cache_key)
             if entry is None:
@@ -71,18 +77,19 @@ class MemoryRewriteCache:
 
     def save_rewrite(
         self,
-        request_id: str,
         article_id: str,
         user_model_hash: str,
         original_headline: str,
         rewritten_headline: str,
+        pipeline_name: str | None = None,
     ) -> str:
-        cache_key = _generate_cache_key(request_id, article_id, user_model_hash)
+        cache_key = _generate_cache_key(article_id, user_model_hash, pipeline_name)
         entry = RewriteCacheEntry(
             rewritten_headline=rewritten_headline,
             original_headline=original_headline,
             user_model_hash=user_model_hash,
             article_id=article_id,
+            pipeline_name=(pipeline_name or ""),
             cached_at=time.time(),
         )
         with self._lock:

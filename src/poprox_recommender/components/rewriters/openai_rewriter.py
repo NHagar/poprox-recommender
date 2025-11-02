@@ -166,10 +166,10 @@ Article text:
 
             if cache_manager and article_id_str:
                 cached_entry = cache_manager.get_cached_rewrite(
-                    request_id=request_id,
                     article_id=article_id_str,
                     user_model_hash=user_model_hash,
                     original_headline=original_headline,
+                    pipeline_name=self.config.pipeline_name,
                 )
                 if cached_entry is not None:
                     art.headline = cached_entry.rewritten_headline
@@ -207,11 +207,11 @@ Article text:
                 metrics["rewritten_headline"] = art.headline
                 if cache_manager and article_id_str:
                     cache_manager.save_rewrite(
-                        request_id=request_id,
                         article_id=article_id_str,
                         user_model_hash=user_model_hash,
                         original_headline=original_headline,
                         rewritten_headline=art.headline,
+                        pipeline_name=self.config.pipeline_name,
                     )
             except Exception as exc:  # pragma: no cover - defensive logging for production observability
                 metrics.update(

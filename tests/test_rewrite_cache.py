@@ -20,23 +20,22 @@ from poprox_concepts.domain import RecommendationList  # noqa: E402
 
 def test_memory_rewrite_cache_roundtrip():
     cache = MemoryRewriteCache(max_entries=4, ttl_seconds=60)
-    request_id = "req-1"
     article_id = "article-123"
     user_hash = hash_user_model("sample user model")
 
     cache.save_rewrite(
-        request_id=request_id,
         article_id=article_id,
         user_model_hash=user_hash,
         original_headline="Original Headline",
         rewritten_headline="Rewritten Headline",
+        pipeline_name="test-pipeline",
     )
 
     entry = cache.get_cached_rewrite(
-        request_id=request_id,
         article_id=article_id,
         user_model_hash=user_hash,
         original_headline="Original Headline",
+        pipeline_name="test-pipeline",
     )
     assert entry is not None
     assert entry.rewritten_headline == "Rewritten Headline"
@@ -44,23 +43,22 @@ def test_memory_rewrite_cache_roundtrip():
 
 def test_memory_rewrite_cache_headline_mismatch_invalidates():
     cache = MemoryRewriteCache(max_entries=4, ttl_seconds=60)
-    request_id = "req-2"
     article_id = "article-456"
     user_hash = hash_user_model("user model")
 
     cache.save_rewrite(
-        request_id=request_id,
         article_id=article_id,
         user_model_hash=user_hash,
         original_headline="Correct Headline",
         rewritten_headline="Rewritten",
+        pipeline_name="test-pipeline",
     )
 
     entry = cache.get_cached_rewrite(
-        request_id=request_id,
         article_id=article_id,
         user_model_hash=user_hash,
         original_headline="Different Headline",
+        pipeline_name="test-pipeline",
     )
     assert entry is None
 
