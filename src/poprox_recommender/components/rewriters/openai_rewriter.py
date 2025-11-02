@@ -13,6 +13,10 @@ from lenskit.pipeline import Component
 from pydantic import BaseModel, Field
 
 from poprox_concepts.domain import RecommendationList
+from poprox_recommender.components.rewriters.rewrite_cache import (
+    get_rewrite_cache_manager,
+    hash_user_model,
+)
 from poprox_recommender.persistence import get_persistence_manager, is_persistence_enabled, schedule_pipeline_save
 from poprox_recommender.timing_context import get_timeout_risk_info
 
@@ -37,10 +41,15 @@ class LLMRewriterConfig(BaseModel):
     model: str = "gpt-4.1-2025-04-14"
     openai_api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
     pipeline_name: str = Field(default="llm_rank_rewrite", description="Name of the pipeline using this rewriter")
+    enable_cache: bool = Field(default=True, description="Enable rewrite caching across pipelines")
 
 
 class LLMRewriter(Component):
     config: LLMRewriterConfig
+
+    def __init__(self, config: LLMRewriterConfig):
+        self.config = config
+        self.cache_manager = get_rewrite_cache_manager() if config.enable_cache else None
 
     def _extract_user_profile_summary(self, user_model: str) -> str:
         """
@@ -120,9 +129,20 @@ class LLMRewriter(Component):
 
         # Extract a concise user profile summary for rewriting
         user_profile_summary = self._extract_user_profile_summary(user_model)
+        user_model_hash = hash_user_model(user_model)
+        cache_manager = self.cache_manager
+        component_meta["cache_enabled"] = cache_manager is not None
+        cache_hits = 0
+        component_meta["cache_hits"] = 0
+        component_meta["cache_misses"] = len(recommendations.articles)
 
         # rewrite article headlines in parallel
         async def rewrite_article(art, client):
+            nonlocal cache_hits
+            original_headline = art.headline
+            article_id = getattr(art, "article_id", None)
+            article_id_str = str(article_id) if article_id is not None else ""
+
             # build prompt using the concise user profile summary
             input_txt = f"""User interest profile:
 {user_profile_summary}
@@ -141,6 +161,30 @@ Article text:
                 "start_time": datetime.now(timezone.utc).isoformat(),
             }
             call_start = time.perf_counter()
+
+            metrics["cache_hit"] = False
+
+            if cache_manager and article_id_str:
+                cached_entry = cache_manager.get_cached_rewrite(
+                    article_id=article_id_str,
+                    user_model_hash=user_model_hash,
+                    original_headline=original_headline,
+                    pipeline_name=self.config.pipeline_name,
+                )
+                if cached_entry is not None:
+                    art.headline = cached_entry.rewritten_headline
+                    metrics.update(
+                        {
+                            "status": "cached",
+                            "duration_seconds": 0.0,
+                            "cache_hit": True,
+                            "rewritten_headline": art.headline,
+                        }
+                    )
+                    metrics["end_time"] = datetime.now(timezone.utc).isoformat()
+                    rewriter_metrics.append(metrics)
+                    cache_hits += 1
+                    return
 
             try:
                 response = await client.responses.parse(
@@ -161,6 +205,14 @@ Article text:
                 # Update the article headline with the rewritten one
                 art.headline = response.output_parsed.headline
                 metrics["rewritten_headline"] = art.headline
+                if cache_manager and article_id_str:
+                    cache_manager.save_rewrite(
+                        article_id=article_id_str,
+                        user_model_hash=user_model_hash,
+                        original_headline=original_headline,
+                        rewritten_headline=art.headline,
+                        pipeline_name=self.config.pipeline_name,
+                    )
             except Exception as exc:  # pragma: no cover - defensive logging for production observability
                 metrics.update(
                     {
@@ -192,6 +244,8 @@ Article text:
             async with openai.AsyncOpenAI(api_key=self.config.openai_api_key) as client:
                 tasks = [rewrite_article(art, client) for art in recommendations.articles]
                 await asyncio.gather(*tasks)
+            component_meta["cache_hits"] = cache_hits
+            component_meta["cache_misses"] = max(len(recommendations.articles) - cache_hits, 0)
 
         try:
             asyncio.run(rewrite_all())
